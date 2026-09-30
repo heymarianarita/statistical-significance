@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { Badge, Box, Card, Cell, Input, List, SelectNative, Stack, StackItem, Tabs, Text } from '@vinted/web-ui'
+import { Badge, Box, Card, Cell, Icon, Input, List, SelectNative, Stack, StackItem, Table, Tabs, Text, Tooltip } from '@vinted/web-ui'
+import { InfoCircle16 } from '@vinted/monochrome-icons'
 import { IntervalChart, LineChart } from './charts'
 import { clampRate, fmt, invNorm, nCompare, nEstimate, normCdf, nRare, pct, wilson, zFor } from './stats'
 
@@ -40,13 +41,121 @@ const DEFAULTS: Record<string, string> = {
 type Fields = typeof DEFAULTS
 type Result = { errors: Partial<Record<keyof Fields, string>>; body?: ReactNode }
 
-function Figure({ value, unit, badge }: { value: string; unit?: string; badge?: ReactNode }) {
+const CONFIDENCE_INFO = 'How sure you want to be that the true value falls in your range. At 95%, you’d be wrong about 1 time in 20. Higher confidence needs more runs.'
+
+const INFO: Record<keyof Fields, string> = {
+  eP: 'Your guess at the share of generations that will pass your rubric, before you test. It only sets how many runs you need: rates near 50% need the most. Unsure? Use 50%, or run a 10–15 generation pilot first.',
+  eM: 'How close the measured pass rate needs to be to the true one. ±10 means a measured 70% could really be anywhere from 60% to 80%. Halving the margin roughly quadruples the runs.',
+  eC: CONFIDENCE_INFO,
+  cP1: 'The pass rate of your current setup, from earlier tests or your best guess.',
+  cP2: 'The pass rate the new setup would need to reach for the change to be worth it. The closer it is to A, the more runs you need.',
+  cC: CONFIDENCE_INFO,
+  cW: 'The chance the test catches the difference if B really is this much better. At 80%, about 1 in 5 real improvements would be missed.',
+  rX: 'The most often you can accept a generation failing, for example a broken layout. Passing this test shows the real failure rate is below it.',
+  rC: CONFIDENCE_INFO,
+  kAs: 'How many of setup A’s generations passed your rubric.',
+  kAn: 'How many generations you ran with setup A in total.',
+  kBs: 'How many of setup B’s generations passed your rubric.',
+  kBn: 'How many generations you ran with setup B in total.',
+  kC: CONFIDENCE_INFO,
+}
+
+// Info icon that explains the thing next to it on hover or keyboard focus
+function InfoTip({ id, about, info }: { id: string; about: string; info: string }) {
   return (
-    <Stack wrap alignment="center" gap="space-300">
-      <Text as="span" type="heading-xxl" theme="primary" text={value} />
-      {unit && <Text as="span" type="body" theme="muted" text={unit} />}
-      {badge}
+    <Tooltip id={id} content={info} display="inline" placement="top-start" shiftOptions={{ mainAxis: true, crossAxis: true }}>
+      <span tabIndex={0} role="img" aria-label={`About ${about}`} aria-describedby={id} className="info-trigger">
+        <Icon name={InfoCircle16} color="greyscale-level-2" display="block" />
+      </span>
+    </Tooltip>
+  )
+}
+
+function InfoLabel({ field, text }: { field: keyof Fields; text: string }) {
+  return (
+    <span className="info-label">
+      {text}
+      <InfoTip id={`${field}-info`} about={text} info={INFO[field]} />
+    </span>
+  )
+}
+
+const TILE_INFO: Record<string, string> = {
+  'Confidence': 'How sure you can be that the true value falls in the range. At 95%, you’d be wrong about 1 time in 20.',
+  'z-score': 'How many standard deviations wide the range has to be for your confidence level. 95% uses 1.96. It’s set by the confidence level, so you don’t enter it.',
+  'Halve the margin': 'Runs you’d need for a margin half as wide. Halving the margin takes about 4 times as many runs.',
+  'Difference': 'How far apart the two pass rates are, in percentage points. Smaller differences need more runs to detect.',
+  'Power': 'The chance the test catches the difference if it’s real. At 80%, about 1 in 5 real improvements would be missed.',
+  'At 90% power': 'Runs per setup for a 90% chance of catching the difference, instead of 80%.',
+  'Rule of three': 'A quick shortcut: with zero failures in n runs, the failure rate is likely below 3 ÷ n. It gives about the same answer at 95% confidence.',
+  'Half the threshold': 'Clean runs you’d need to show a failure rate half as high.',
+  'Passed': 'Passing generations out of all runs.',
+  'A passed': 'Setup A’s passing generations out of all its runs.',
+  'B passed': 'Setup B’s passing generations out of all its runs.',
+  'Low end': 'The lowest the true pass rate is likely to be, given your results.',
+  'High end': 'The highest the true pass rate is likely to be, given your results.',
+  'Needed at 80% power': 'Runs per setup you’d need to reliably detect a gap this size. If you ran fewer, a non-significant result doesn’t mean there’s no difference.',
+}
+
+type MarginRow = { margin: number; use: string }
+const MARGIN_ROWS: MarginRow[] = [
+  { margin: 20, use: 'A quick look at whether the setup mostly works or mostly fails' },
+  { margin: 15, use: 'A first rough read, for example after changing a prompt' },
+  { margin: 10, use: 'The practical default. Precise enough to report, still affordable' },
+  { margin: 5, use: 'Only when a few points really matter, such as a public benchmark' },
+]
+const DEFAULT_MARGIN = 10
+
+// Runs follow the expected pass rate and confidence entered on the Pass rate tab
+function MarginGuide({ passRate, conf }: { passRate: number; conf: number }) {
+  const p = passRate > 0 && passRate < 1 ? passRate : 0.7
+  const z = zFor(conf)
+  const strong = (row: MarginRow, text: string) =>
+    <Text as="span" type="body" bold={row.margin === DEFAULT_MARGIN} text={text} />
+  return (
+    <Stack direction="column" gap="space-400" padding="space-600" fillEqually>
+      <Stack direction="column" gap="space-200">
+        <Text as="h2" type="heading" text="Choosing a margin of error" />
+        <Text as="p" type="body" theme="muted" text={`No single margin is best. Pick the widest one that still gives you a clear decision, because narrower margins cost a lot more runs. For a ${pct(p)} expected pass rate at ${pct(conf)} confidence:`} />
+      </Stack>
+      <div className="table-scroll">
+        <Table<MarginRow>
+          columns={[
+            { accessor: 'margin', header: 'Margin', render: (m, row) => strong(row, `±${m}`) },
+            { id: 'runs', header: 'Runs', render: (row: MarginRow) => strong(row, fmt(nEstimate(p, row.margin / 100, z))) },
+            { accessor: 'use', header: 'Good for', render: (u, row) => strong(row, u) },
+          ]}
+          data={MARGIN_ROWS}
+          getRowId={(row: MarginRow) => row.margin}
+          rowDividers
+        />
+      </div>
+      <Text as="p" type="caption" theme="muted" text="To choose, check that your whole range lands on one side of the pass rate you need. Needing 70% and measuring 85% ±10 gives 75–95%, a clear yes. Measuring 75% ±10 gives 65–85%, which crosses the line, so you need more runs." />
     </Stack>
+  )
+}
+
+const FIGURE_THEME = {
+  info: 'background-passive-primary-subtle',
+  success: 'background-passive-success-subtle',
+  warning: 'background-passive-warning-subtle',
+} as const
+
+// The headline answer, on a tinted panel so it stands out from the supporting details
+function Figure({ value, unit, badge, sentence, type = 'info' }: {
+  value: string; unit?: string; badge?: ReactNode; sentence: string; type?: keyof typeof FIGURE_THEME
+}) {
+  return (
+    <Box theme={FIGURE_THEME[type]} border="none" padding="space-400">
+      <Stack direction="column" gap="space-200">
+        <Stack wrap alignment="center" gap="space-300">
+          <Text as="span" type="heading-xxl" theme="primary" text={value} />
+          {unit && <Text as="span" type="body" theme="muted" text={unit} />}
+          {badge}
+        </Stack>
+        <Text as="p" type="body" text={sentence} />
+      </Stack>
+    </Box>
   )
 }
 
@@ -57,7 +166,10 @@ function Details({ items }: { items: [string, string][] }) {
         <StackItem key={k} flex="1 1 140px">
           <Box theme="background-passive-neutral-subtle-low" border="none" padding="space-300">
             <Stack direction="column" gap="space-100">
-              <Text as="span" type="caption" theme="muted" text={k} />
+              <span className="info-label">
+                <Text as="span" type="caption" theme="muted" text={k} />
+                {TILE_INFO[k] && <InfoTip id={`tile-${k.replace(/\W+/g, '-').toLowerCase()}-info`} about={k} info={TILE_INFO[k]} />}
+              </span>
               <Text as="span" type="title" text={v} />
             </Stack>
           </Box>
@@ -91,8 +203,7 @@ function compute(mode: Mode, v: Fields): Result {
     return {
       errors,
       body: <>
-        <Figure value={fmt(runs)} unit="test runs" />
-        <Text as="p" type="body" text={`Run ${fmt(runs)} generations. If about ${pct(p)} pass, you'll know the true pass rate to within ±${Math.round(E * 100)} points (${pct(Math.max(0, p - E))}–${pct(Math.min(1, p + E))}) with ${pct(conf)} confidence.`} />
+        <Figure value={fmt(runs)} unit="test runs" sentence={`Run ${fmt(runs)} generations. If about ${pct(p)} pass, you'll know the true pass rate to within ±${Math.round(E * 100)} points (${pct(Math.max(0, p - E))}–${pct(Math.min(1, p + E))}) with ${pct(conf)} confidence.`} />
         <Details items={[['Confidence', pct(conf)], ['z-score', z.toFixed(3)], ['Halve the margin', `${fmt(nEstimate(p, E / 2, z))} runs`]]} />
         <Formula text={`n = z² × p(1 − p) ÷ E² = ${z.toFixed(2)}² × ${p.toFixed(2)} × ${(1 - p).toFixed(2)} ÷ ${E.toFixed(2)}²`} />
         <Chart title="Tighter margins cost many more runs">
@@ -117,8 +228,7 @@ function compute(mode: Mode, v: Fields): Result {
     return {
       errors,
       body: <>
-        <Figure value={fmt(runs)} unit={`runs per setup · ${fmt(runs * 2)} total`} />
-        <Text as="p" type="body" text={`Run ${fmt(runs)} generations with A and ${fmt(runs)} with B. If B truly passes ${pct(p2)} against A's ${pct(p1)}, you have a ${pct(power)} chance of getting a result that's significant at ${pct(conf)} confidence.`} />
+        <Figure value={fmt(runs)} unit={`runs per setup · ${fmt(runs * 2)} total`} sentence={`Run ${fmt(runs)} generations with A and ${fmt(runs)} with B. If B truly passes ${pct(p2)} against A's ${pct(p1)}, you have a ${pct(power)} chance of getting a result that's significant at ${pct(conf)} confidence.`} />
         <Details items={[['Difference', `${sign}${Math.round(diff * 100)} pts`], ['Confidence', pct(conf)], ['Power', pct(power)], ['At 90% power', `${fmt(nCompare(p1, p2, za, invNorm(0.9)))} / setup`]]} />
         <Formula text={`n = [z(α/2)·√(2p̄q̄) + z(β)·√(p₁q₁ + p₂q₂)]² ÷ (p₁ − p₂)², with z(α/2) = ${za.toFixed(2)}, z(β) = ${zb.toFixed(2)}`} />
         {maxD > 0.03 && (
@@ -138,8 +248,7 @@ function compute(mode: Mode, v: Fields): Result {
     return {
       errors: {},
       body: <>
-        <Figure value={fmt(runs)} unit="runs in a row, zero failures" />
-        <Text as="p" type="body" text={`If ${fmt(runs)} generations in a row all pass, you can say with ${pct(conf)} confidence that the failure rate is below ${pct(x, x < 0.1 ? 1 : 0)}. If any run fails, this no longer holds. Use the Pass rate tab to measure the rate instead.`} />
+        <Figure value={fmt(runs)} unit="runs in a row, zero failures" sentence={`If ${fmt(runs)} generations in a row all pass, you can say with ${pct(conf)} confidence that the failure rate is below ${pct(x, x < 0.1 ? 1 : 0)}. If any run fails, this no longer holds. Use the Pass rate tab to measure the rate instead.`} />
         <Details items={[['Rule of three', `≈ ${fmt(Math.ceil(3 / x))} runs`], ['Confidence', pct(conf)], ['Half the threshold', `${fmt(nRare(x / 2, conf))} runs`]]} />
         <Formula text={`n = ln(1 − confidence) ÷ ln(1 − max failure rate) = ln(${(1 - conf).toFixed(2)}) ÷ ln(${(1 - x).toFixed(3)})`} />
         <Chart title="Proving a lower failure rate takes more clean runs">
@@ -168,8 +277,7 @@ function compute(mode: Mode, v: Fields): Result {
     return {
       errors,
       body: <>
-        <Figure value={pct(pA)} unit={`pass rate from ${fmt(an)} runs`} />
-        <Text as="p" type="body" text={`The true pass rate is likely between ${pct(aLo)} and ${pct(aHi)} (${pct(conf)} confidence). To narrow that to ±5 points, you'd need about ${fmt(nEstimate(clampRate(pA), 0.05, z))} runs.`} />
+        <Figure value={pct(pA)} unit={`pass rate from ${fmt(an)} runs`} sentence={`The true pass rate is likely between ${pct(aLo)} and ${pct(aHi)} (${pct(conf)} confidence). To narrow that to ±5 points, you'd need about ${fmt(nEstimate(clampRate(pA), 0.05, z))} runs.`} />
         <Details items={[['Passed', `${fmt(as)} / ${fmt(an)}`], ['Low end', pct(aLo, 1)], ['High end', pct(aHi, 1)]]} />
         <Chart title="Observed pass rate, with the range the true rate likely falls in">
           <IntervalChart rows={[{ label: 'Setup A', p: pA, lo: aLo, hi: aHi }]} />
@@ -193,8 +301,7 @@ function compute(mode: Mode, v: Fields): Result {
   return {
     errors,
     body: <>
-      <Figure value={`p = ${pvTxt}`} badge={<Badge theme={sig ? 'success' : 'warning'} styling="light" content={sig ? 'Significant' : 'Not significant yet'} />} />
-      <Text as="p" type="body" text={sig
+      <Figure type={sig ? 'success' : 'warning'} value={`p = ${pvTxt}`} badge={<Badge theme={sig ? 'success' : 'warning'} styling="light" content={sig ? 'Significant' : 'Not significant yet'} />} sentence={sig
         ? `B's ${pct(pB)} against A's ${pct(pA)} is a real difference at ${pct(conf)} confidence. The true gap is likely between ${signed(dLo)} and ${signed(dHi)} points.`
         : `The gap between A (${pct(pA)}) and B (${pct(pB)}) could still be chance at ${pct(conf)} confidence.${need ? ` To reliably detect a gap this size, plan for about ${fmt(need)} runs per setup.` : ''}`} />
       <Details items={[['A passed', `${fmt(as)} / ${fmt(an)}`], ['B passed', `${fmt(bs)} / ${fmt(bn)}`], ['Difference', `${signed(pB - pA)} pts`], ['Needed at 80% power', need ? `${fmt(need)} / setup` : '—']]} />
@@ -214,11 +321,11 @@ export function App() {
   const tab = TABS.find(t => t.id === mode)!
 
   const num = (k: keyof Fields, label: string, opts: { suffix?: string; helperText?: string; step?: string } = {}) => (
-    <Input key={k} id={k} name={k} type="number" inputMode="decimal" label={label} value={v[k]} onChange={set(k)}
+    <Input key={k} id={k} name={k} type="number" inputMode="decimal" label={<InfoLabel field={k} text={label} />} value={v[k]} onChange={set(k)}
       step={opts.step} suffix={opts.suffix} helperText={opts.helperText} validation={errors[k]} />
   )
   const select = (k: keyof Fields, label: string, options: typeof CONFIDENCE, helperText?: string) => (
-    <SelectNative key={k} id={k} name={k} label={label} options={options} value={v[k]} onChange={set(k)} helperText={helperText} />
+    <SelectNative key={k} id={k} name={k} label={<InfoLabel field={k} text={label} />} options={options} value={v[k]} onChange={set(k)} helperText={helperText} />
   )
   const pair = (a: ReactNode, b: ReactNode) => (
     <Stack gap="space-300" fillEqually>{a}{b}</Stack>
@@ -257,40 +364,50 @@ export function App() {
           <Text as="p" type="body" theme="muted" text="Work out how many AI prototype generations to run before you trust the result. Score each generation pass or fail against a fixed rubric, then pick the question you're trying to answer." />
         </Stack>
 
-        <Card>
-          <div className="tabs-scroll">
-            <Tabs items={TABS.map(t => ({ id: t.id, title: t.title }))} activeItemId={mode} onClick={item => setMode(item.id as Mode)} divider />
-          </div>
-          <Stack wrap gap="space-600" padding="space-600">
-            <StackItem flex="1 1 280px">
-              <Stack direction="column" gap="space-400" fillEqually>
-                <Text as="h2" type="title" text={tab.question} />
-                {inputs[mode]}
-                <Text as="p" type="caption" theme="muted" text="Fields start with example values. Replace them with your own." />
-              </Stack>
-            </StackItem>
-            <StackItem flex="2 1 380px">
-              <div aria-live="polite" className="result">
-                <Stack direction="column" gap="space-500" fillEqually>
-                  {body ?? <Text as="p" type="body" theme="muted" text="Fix the highlighted field to see the result." />}
+        <div className="parent-card">
+          <Card overflow="visible">
+            <div className="tabs-scroll">
+              <Tabs items={TABS.map(t => ({ id: t.id, title: t.title }))} activeItemId={mode} onClick={item => setMode(item.id as Mode)} divider />
+            </div>
+            <Stack wrap gap="space-600" padding="space-600">
+              <StackItem flex="1 1 280px">
+                <Stack direction="column" gap="space-400" fillEqually>
+                  <Text as="h2" type="title" text={tab.question} />
+                  {inputs[mode]}
+                  <Text as="p" type="caption" theme="muted" text="Fields start with example values. Replace them with your own." />
                 </Stack>
-              </div>
-            </StackItem>
-          </Stack>
-        </Card>
+              </StackItem>
+              <StackItem flex="2 1 380px">
+                <div aria-live="polite" className="result">
+                  <Stack direction="column" gap="space-500" fillEqually>
+                    {body ?? <Text as="p" type="body" theme="muted" text="Fix the highlighted field to see the result." />}
+                  </Stack>
+                </div>
+              </StackItem>
+            </Stack>
+          </Card>
+        </div>
 
-        <Card>
-          <Stack direction="column" gap="space-200" paddingTop="space-600" paddingHorizontal="space-600">
-            <Text as="h2" type="heading" text="Before you run the tests" />
-          </Stack>
-          <List mode="modern" dividerBetween paddingVertical="space-300">
-            {NOTES.map(n => (
-              <List.Item key={n.title}>
-                <Cell title={n.title} body={n.body} />
-              </List.Item>
-            ))}
-          </List>
-        </Card>
+        <div className="parent-card">
+          <Card>
+            <MarginGuide passRate={parseFloat(v.eP) / 100} conf={parseFloat(v.eC)} />
+          </Card>
+        </div>
+
+        <div className="parent-card">
+          <Card>
+            <Stack direction="column" gap="space-200" paddingTop="space-600" paddingHorizontal="space-600">
+              <Text as="h2" type="heading" text="Before you run the tests" />
+            </Stack>
+            <List mode="modern" dividerBetween paddingVertical="space-300" paddingHorizontal="space-200">
+              {NOTES.map(n => (
+                <List.Item key={n.title}>
+                  <Cell title={n.title} body={n.body} />
+                </List.Item>
+              ))}
+            </List>
+          </Card>
+        </div>
       </Stack>
     </main>
   )

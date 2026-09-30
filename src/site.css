@@ -1,7 +1,14 @@
 /* Layout only: things web-ui's Stack can't express. Colours come from web-ui tokens. */
 body { margin: 0; background: rgba(var(--background-passive-neutral-subtle-low)); color: rgba(var(--greyscale-level-1)); }
-.page { max-width: 1040px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 56px; }
-.tabs-scroll { overflow-x: auto; }
+.page { overflow-x: clip; max-width: 1040px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 56px; }
+.tabs-scroll { overflow-x: auto; border-radius: 12px 12px 0 0; }
 .tabs-scroll > * { width: max-content; min-width: 100%; }
 .result { min-width: 0; }
 .result svg text { font-family: inherit; }
+.info-label { display: inline-flex; align-items: center; gap: 6px; }
+.info-trigger { display: flex; line-height: 0; cursor: help; border-radius: 50%; }
+.info-trigger:focus-visible { outline: 2px solid rgba(var(--primary-default)); outline-offset: 2px; }
+/* Deliberate exception: parent cards use 12px corners. web-ui radius tokens stop at 8px,
+   and Card sets its radius variable on its own root, so it's set on the wrapper's child. */
+.parent-card > * { --v-comp-card-parameters-border-radius: 12px; }
+.table-scroll { overflow-x: auto; }

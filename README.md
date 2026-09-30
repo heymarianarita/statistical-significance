@@ -20,3 +20,12 @@ pnpm dev
 ```
 
 `pnpm build` writes a static site to `dist/`.
+
+## Deploy to Playground
+
+Playground can't reach the VPN-only `@vinted` registry, so build locally and upload a zip that nginx serves:
+
+```bash
+pnpm build
+zip -rq ../statistical-significance-playground.zip Dockerfile nginx.conf dist -x "*.DS_Store"
+```
