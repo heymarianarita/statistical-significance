@@ -1,0 +1,7 @@
+/* Layout only: things web-ui's Stack can't express. Colours come from web-ui tokens. */
+body { margin: 0; background: rgba(var(--background-passive-neutral-subtle-low)); color: rgba(var(--greyscale-level-1)); }
+.page { max-width: 1040px; margin: 0 auto; padding-inline: 16px; padding-block: 32px 56px; }
+.tabs-scroll { overflow-x: auto; }
+.tabs-scroll > * { width: max-content; min-width: 100%; }
+.result { min-width: 0; }
+.result svg text { font-family: inherit; }

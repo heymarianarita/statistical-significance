@@ -1,0 +1,3 @@
+/* V-Inter is served from web-ui-assets.vinted.com, which blocks cross-origin loads here
+   and isn't on the artifact host's font allowlist, so this uses web-ui's fallback stack. */
+* { font-family: 'V-Inter', 'Helvetica Neue', 'Helvetica-Neue', 'Arial', sans-serif; }
