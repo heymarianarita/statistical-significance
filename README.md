@@ -23,7 +23,7 @@ pnpm dev
 
 ## Deploy to Playground
 
-Playground can't reach the VPN-only `@vinted` registry, so build locally and upload a zip that nginx serves:
+Playground can't reach the VPN-only `@vinted` registry, so the built site in `dist/` is committed and the `Dockerfile` serves it with nginx. Run `pnpm build` and commit `dist/` before redeploying from GitHub, or upload a zip:
 
 ```bash
 pnpm build
